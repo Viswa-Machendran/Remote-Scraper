@@ -1,49 +1,41 @@
-import streamlit as st
+import tkinter as tk
+from tkinter import messagebox
 import cloudscraper
 from bs4 import BeautifulSoup
-import pandas as pd
-import time
+from openpyxl import Workbook
 from datetime import datetime
+import time
+import threading
+from tqdm import tqdm
 
-# ================= FIXED PARAMETERS =================
+
+# FIXED PARAMETERS
 DELAY_PER_ISIN = 0.33
 PAUSE_EVERY = 30
 PAUSE_DURATION = 10
 
-# ================= PAGE CONFIG =================
-st.set_page_config(page_title="Fondsweb Scraper", layout="wide")
 
-st.title("Fondsweb Fund Name Scraper")
+def scrape_funds_thread():
+    btn_scrape.config(state=tk.DISABLED)
 
-# ================= INPUT =================
-isins_text = st.text_area(
-    "Enter ISINs (comma, space, or newline separated):",
-    height=200,
-    placeholder="LU1234567890\nIE00XXXXXXX\nCH0000000001"
-)
+    input_text = entry_isins.get("1.0", "end").strip()
+    if not input_text:
+        messagebox.showwarning("Input needed", "Please enter one or more ISINs.")
+        btn_scrape.config(state=tk.NORMAL)
+        return
 
-# ================= SETTINGS DISPLAY =================
-col1, col2, col3 = st.columns(3)
+    raw_isins = input_text.replace(",", " ").split()
+    target_isins = [isin.strip().upper() for isin in raw_isins if isin.strip()]
 
-col1.metric("Delay per ISIN (sec)", DELAY_PER_ISIN)
-col2.metric("Pause every (ISINs)", PAUSE_EVERY)
-col3.metric("Pause duration (sec)", PAUSE_DURATION)
-
-st.divider()
-
-# ================= SCRAPER FUNCTION =================
-def scrape(isins):
-    scraper = cloudscraper.create_scraper()
     variants = ["at", "de", "ch"]
+    scraper = cloudscraper.create_scraper()
+    results = {}
 
-    results = []
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    print(f"\n🚀 Scraping {len(target_isins)} ISINs...\n")
+    progress = tqdm(target_isins, desc="Scraping", unit="isin")
 
-    total = len(isins)
-
-    for i, isin in enumerate(isins, 1):
-        row = {"ISIN": isin}
+    for i, isin in enumerate(progress, 1):
+        results[isin] = {}
 
         for variant in variants:
             fund_name = None
@@ -51,63 +43,85 @@ def scrape(isins):
 
             try:
                 response = scraper.get(url)
-
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.text, "html.parser")
                     h1 = soup.find("h1")
-
                     if h1:
                         text = h1.get_text(strip=True)
                         if "not available" not in text.lower():
                             fund_name = text
 
-                row[variant.upper()] = fund_name if fund_name else "Not found"
+                results[isin][variant.upper()] = fund_name if fund_name else "Not found"
 
             except Exception as e:
-                row[variant.upper()] = f"Error"
-
-        results.append(row)
-
-        # Progress UI
-        progress_bar.progress(i / total)
-        status_text.text(f"Processing {i}/{total} ISINs")
+                results[isin][variant.upper()] = f"Error: {e}"
 
         # Delay
         time.sleep(DELAY_PER_ISIN)
 
         # Controlled pause
         if i % PAUSE_EVERY == 0:
-            status_text.text(f"Pausing for {PAUSE_DURATION} sec...")
+            print(f"⏸️ Pausing for {PAUSE_DURATION} sec after {i} ISINs...")
             time.sleep(PAUSE_DURATION)
 
-    progress_bar.empty()
-    status_text.empty()
+    # Save to Excel
+    try:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Funds Data"
 
-    return pd.DataFrame(results)
+        ws.append(["ISIN", "AT Fund Name", "DE Fund Name", "CH Fund Name"])
+
+        for isin in results:
+            ws.append([
+                isin,
+                results[isin].get("AT", "Not found"),
+                results[isin].get("DE", "Not found"),
+                results[isin].get("CH", "Not found"),
+            ])
+
+        filename = f"fondsweb_fundnames_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        wb.save(filename)
+
+        messagebox.showinfo("Success", f"Saved: {filename}")
+
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+
+    finally:
+        btn_scrape.config(state=tk.NORMAL)
 
 
-# ================= RUN BUTTON =================
-if st.button("🚀 Run Scraper"):
+def scrape_funds():
+    threading.Thread(target=scrape_funds_thread, daemon=True).start()
 
-    if not isins_text.strip():
-        st.warning("Please enter ISINs.")
-    else:
-        raw = isins_text.replace(",", " ").split()
-        isins = [x.strip().upper() for x in raw if x.strip()]
 
-        st.info(f"Processing {len(isins)} ISINs...")
+# ================= GUI =================
+root = tk.Tk()
+root.title("Fondsweb Scraper")
+root.geometry("650x420")
 
-        df = scrape(isins)
+# ISIN Input
+tk.Label(root, text="Enter ISINs:").pack(pady=(10, 0))
 
-        st.success("Scraping completed!")
+entry_isins = tk.Text(root, height=10, width=70)
+entry_isins.pack(pady=5)
 
-        st.dataframe(df, use_container_width=True)
+# SETTINGS DISPLAY (FIXED)
+frame_settings = tk.Frame(root)
+frame_settings.pack(pady=10)
 
-        # Download
-        filename = f"fondsweb_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        st.download_button(
-            label="⬇ Download Excel",
-            data=df.to_excel(index=False, engine='openpyxl'),
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+tk.Label(frame_settings, text="Delay per ISIN (sec):").grid(row=0, column=0, padx=10)
+tk.Label(frame_settings, text=str(DELAY_PER_ISIN), fg="blue").grid(row=0, column=1)
+
+tk.Label(frame_settings, text="Pause every (ISINs):").grid(row=0, column=2, padx=10)
+tk.Label(frame_settings, text=str(PAUSE_EVERY), fg="blue").grid(row=0, column=3)
+
+tk.Label(frame_settings, text="Pause duration (sec):").grid(row=0, column=4, padx=10)
+tk.Label(frame_settings, text=str(PAUSE_DURATION), fg="blue").grid(row=0, column=5)
+
+# Button
+btn_scrape = tk.Button(root, text="Scrape Fund Names", command=scrape_funds)
+btn_scrape.pack(pady=15)
+
+root.mainloop()
