@@ -4,7 +4,6 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 from datetime import datetime
-from io import BytesIO  # ✅ REQUIRED FIX
 
 # ================= FIXED PARAMETERS =================
 DELAY_PER_ISIN = 0.33
@@ -25,6 +24,7 @@ isins_text = st.text_area(
 
 # ================= SETTINGS DISPLAY =================
 col1, col2, col3 = st.columns(3)
+
 col1.metric("Delay per ISIN (sec)", DELAY_PER_ISIN)
 col2.metric("Pause every (ISINs)", PAUSE_EVERY)
 col3.metric("Pause duration (sec)", PAUSE_DURATION)
@@ -63,8 +63,8 @@ def scrape(isins):
 
                 row[variant.upper()] = fund_name if fund_name else "Not found"
 
-            except Exception:
-                row[variant.upper()] = "Error"
+            except Exception as e:
+                row[variant.upper()] = f"Error"
 
         results.append(row)
 
@@ -77,7 +77,7 @@ def scrape(isins):
 
         # Controlled pause
         if i % PAUSE_EVERY == 0:
-            status_text.text(f"⏸️ Pausing for {PAUSE_DURATION} sec...")
+            status_text.text(f"Pausing for {PAUSE_DURATION} sec...")
             time.sleep(PAUSE_DURATION)
 
     progress_bar.empty()
@@ -101,27 +101,13 @@ if st.button("🚀 Run Scraper"):
 
         st.success("Scraping completed!")
 
-        # ✅ Remove index from display
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, use_container_width=True)
 
-        # ================= DOWNLOAD (FIXED) =================
-        output = BytesIO()
-        df.to_excel(output, index=False, engine='openpyxl')  # ✅ NO INDEX
-        output.seek(0)
-
+        # Download
         filename = f"fondsweb_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-
         st.download_button(
             label="⬇ Download Excel",
-            data=output,
+            data=df.to_excel(index=False, engine='openpyxl'),
             file_name=filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-        # ✅ Optional CSV (fast + safe)
-        st.download_button(
-            label="⬇ Download CSV",
-            data=df.to_csv(index=False).encode("utf-8"),
-            file_name="fondsweb.csv",
-            mime="text/csv"
         )
